@@ -17,9 +17,10 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/Support/TargetSelect.h"
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/set.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <asm/prctl.h>
@@ -46,9 +47,9 @@ bool is_xsmm_available() {
 #endif
 }
 
-namespace py = pybind11;
+namespace py = nanobind;
 
-void init_triton_cpu_passes_ttcpuir(py::module &&m) {
+void init_triton_cpu_passes_ttcpuir(py::module_ &m) {
   using namespace mlir::triton;
 
   py::enum_<cpu::VecLib>(m, "VecLib")
@@ -232,9 +233,10 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   });
 }
 
-void init_triton_cpu(py::module &&m) {
+void init_triton_cpu(py::module_ &m) {
   auto passes = m.def_submodule("passes");
-  init_triton_cpu_passes_ttcpuir(passes.def_submodule("ttcpuir"));
+  auto ttcpuir = passes.def_submodule("ttcpuir");
+  init_triton_cpu_passes_ttcpuir(ttcpuir);
 
   m.def("enable_amx", []() -> bool {
 #if defined(__linux__) && defined(ARCH_REQ_XCOMP_PERM)

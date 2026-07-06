@@ -277,7 +277,7 @@ class CPUBackend(BaseBackend):
         cpu.passes.ttcpuir.add_math_to_libm(pm)
         cpu.passes.ttcpuir.add_vector_to_llvmir(pm, options.enable_fast_math)
         cpu.passes.ttcpuir.add_memref_to_llvmir(pm)
-        passes.convert.add_reconcile_unrealized(pm)
+        passes.convert.add_reconcile_unrealized_casts(pm)
         passes.convert.add_arith_to_llvmir(pm)
         # passes.convert.add_cf_to_llvmir(pm)
         cpu.passes.ttcpuir.add_func_to_llvmir(pm)

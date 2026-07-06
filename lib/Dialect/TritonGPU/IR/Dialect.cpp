@@ -106,8 +106,6 @@ bool isGenericLinearEncoding(Attribute attr) {
 Attribute inferEncodingFromLinearLayout(MLIRContext *ctx, LinearLayout ll,
                                         Attribute srcEnc) {
   if (isGenericLinearEncoding(srcEnc)) {
-    assert(!isPermutationMatrixLayout(ll) &&
-           "Expected non-permutation layout from this source encoding");
     return GenericLinearEncodingAttr::get(ctx, std::move(ll));
   }
   return LinearEncodingAttr::get(ctx, std::move(ll));
@@ -452,12 +450,20 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
                                               ArrayRef<int64_t> shapeLogical) {
   SmallVector<int64_t> shape(shapeLogical);
+  std::optional<int64_t> packedAxis;
   if (auto sharedMMALayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-    if (sharedMMALayout.getFp4Padded()) {
-      auto packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
-      shape[packedAxis] *= 2;
-    }
+    if (sharedMMALayout.getFp4Padded())
+      packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
+  } else if (auto tmemLayout =
+                 dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
+    // An fp4Padded TMEM descriptor keeps the packed Mx(K/2)xi8 shape. Allocate
+    // two physical columns per packed K coordinate so each logical FP4 element
+    // occupies one byte in TMEM.
+    if (tmemLayout.getFp4Padded())
+      packedAxis = 1;
   }
+  if (packedAxis)
+    shape[*packedAxis] *= 2;
   return getShapePerCTA(layout, shape);
 }
 
@@ -3228,17 +3234,17 @@ struct TritonGPUInferLayoutInterface
 
       auto aLL = aEncoding.getCGALayout().getLinearLayout();
       auto bLL = bEncoding.getCGALayout().getLinearLayout();
-      // In multi-CTA, the CGA layout of operand 0 broadcasts across dim1 and
-      // operand 1 broadcasts across dim0.
+      // A broadcasts over N, B over M (the trailing two result dims). Batch
+      // dims (rank > 2) are shared across A/B/result, not broadcast.
       auto ctx = op->getContext();
-      auto dim0 = StringAttr::get(ctx, "dim0");
-      auto dim1 = StringAttr::get(ctx, "dim1");
-      // Resize to size 1 makes the dimension broadcast-only (all bases
-      // become 0).
-      if (aLL != resLL.resizeOutDim(dim1, 1))
+      int rank = cast<RankedTensorType>(dotOp.getD().getType()).getRank();
+      auto mDim = StringAttr::get(ctx, "dim" + std::to_string(rank - 2));
+      auto nDim = StringAttr::get(ctx, "dim" + std::to_string(rank - 1));
+      // resizeOutDim(d, 1) makes d broadcast-only.
+      if (aLL != resLL.resizeOutDim(nDim, 1))
         return op->emitError("Incompatible CGA layout for operand 0");
 
-      if (bLL != resLL.resizeOutDim(dim0, 1))
+      if (bLL != resLL.resizeOutDim(mDim, 1))
         return op->emitError("Incompatible CGA layout for operand 1");
     }
     return success();
@@ -3735,10 +3741,18 @@ struct TritonGPUInferLayoutInterface
     }
 
     auto ll = toLinearLayout(shape, inEnc);
-    auto newLl = LinearLayout::empty();
-    auto result = tryJoinOnAxis(ctx, ll, newLl, fwdInference, axis, loc);
-    if (!result.succeeded())
-      return result;
+    auto kRegister = StringAttr::get(ctx, "register");
+    auto outDims = llvm::to_vector(ll.getOutDimNames());
+    auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
+    LinearLayout newLl;
+    if (fwdInference) {
+      newLl = split * ll;
+    } else if (auto bwdLl = divideLeft(ll, split)) {
+      newLl = *bwdLl;
+    } else {
+      return emitOptionalError(loc, "invalid result layout for Fp4ToFpOp");
+    }
+
     outEnc = inferEncodingFromLinearLayout(ctx, std::move(newLl), inEnc);
     return success();
   }

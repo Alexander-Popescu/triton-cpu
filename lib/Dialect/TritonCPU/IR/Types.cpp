@@ -9,7 +9,7 @@ using namespace mlir::triton::cpu;
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/TritonCPU/IR/Types.cpp.inc"
 
-Type TokenType::parse(AsmParser &parser) {
+Type triton::cpu::TokenType::parse(AsmParser &parser) {
   if (parser.parseLess())
     return Type();
 
@@ -20,10 +20,10 @@ Type TokenType::parse(AsmParser &parser) {
   if (parser.parseGreater())
     return Type();
 
-  return TokenType::get(parser.getContext(), type);
+  return triton::cpu::TokenType::get(parser.getContext(), type);
 }
 
-void TokenType::print(AsmPrinter &printer) const {
+void triton::cpu::TokenType::print(AsmPrinter &printer) const {
   printer << "<" << getType() << ">";
 }
 
